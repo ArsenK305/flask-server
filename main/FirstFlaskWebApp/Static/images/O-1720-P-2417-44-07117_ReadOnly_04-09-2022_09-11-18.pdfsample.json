@@ -1,0 +1,22 @@
+{
+    "Role_input": [
+        "MSH\n",
+        "AAM\n",
+        "AKB\n",
+        "AD\n",
+        "AAM\n",
+        "MSH\n",
+        "AKB\n",
+        "AD\n"
+    ],
+    "REV": [
+        "K01\n",
+        "K01\n"
+    ],
+    "Proj_no": "0-1720-071-17\n",
+    "Date": "01/02/22\n",
+    "Revisions": "TCO REVIEW\n",
+    "Scale": "NTS\n",
+    "Drawing_no": "0-1720-P-247-48-07117\n",
+    "Project_name": "G75-2 MCC UPGRADE\nSCHEMATIC DIAGRAM\n76-6.5, 0-1720-AC-400-010, 880V-1\n\u041c\u041e\u0414\u0415\u0420\u041d\u0418\u0417\u0410\u0426\u0418\u042f \u0429\u0421\u0423 \u0413\u0422\u0417\u0421-2\n\u041f\u0420\u0418\u041d\u0426\u0418\u041f\u0418\u0410\u041b\u042c\u041d\u0410\u042f \u0421\u0425\u0415\u041c\u0410\n11-6.5,0-1/20-\u0410\u0421-400-010, 886/-1\n"
+}
