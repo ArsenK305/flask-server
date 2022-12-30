@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request, send_file, session, Response, send_from_directory
+from flask import Flask, render_template, request, send_file, session, Response, send_from_directory, jsonify
 
 from mrcnn.config import Config
 from mrcnn import model as modellib
-from mrcnn.visualize import image_mask_and_boxes, instances_to_images, create_image_boxed, add_value, get_image_for_blueprint, project_name_correction
+from mrcnn.visualize import image_mask_and_boxes, instances_to_images, create_image_boxed, add_value, \
+    get_image_for_blueprint, project_name_correction
 from mrcnn.use_tesseract import image_to_string, image_to_txt, image_to_df
 # from mrcnn.closes_node import closest_node2
 
@@ -327,6 +328,7 @@ def detect2(model, image):
     except:
         return None
 
+
 def splash_global(model, class_names, image):
     with session.as_default():
         with session.graph.as_default():
@@ -377,9 +379,254 @@ def filter_array_of_array(arr_class_ids, arr_conf, arr_boxes, arr_masks, ids_lis
     return arr_conf, arr_boxes, arr_class_ids, arr_masks
 
 
+def predict(pdffile):
+
+    # global graph, session
+    # with session.as_default():
+
+    # image_path = "./Static/" + "/images/" + imagefile.filename
+    output_image_path = os.path.join(app.config['UPLOAD_FOLDER'], pdffile.filename)
+    pdffile.save(output_image_path)
+
+    image = get_image_for_blueprint(output_image_path, dpi=200)
+
+    r0 = detect1(model2, image)
+    if r0 is None:
+        return render_template('no_detection.html')
+    if 1 in r0['class_ids'] and 2 in r0['class_ids']:  # Оба штампа найдены
+        # Выбираем тот в котором больше уверенности
+        if r0['scores'][np.where(r0['class_ids'] == 1)[0][0]] > r0['scores'][np.where(r0['class_ids'] == 2)[0][0]]:
+            accept = [1]
+        else:
+            accept = [2]
+    else:
+        accept = [1, 2]
+
+    what_cropped = ["Stamp", "Company_name", "Label_title_h", "Label_title_v", "Label_Proj_no_h",
+                    "Label_Proj_no_v", "Label_dr_no_h", "Label_dr_no_v", "Label_rev_h", "Label_rev_v",
+                    "Label_scale_h", "Label_scale_v", "Label_date_h", "Label_date_v"]
+    dict_images = instances_to_images(image, r0['rois'], r0['class_ids'], names=class_names_model2,
+                                      list_accepted_ids=accept, stamp=False)
+    dict_text = {}
+
+    try:
+        for id in dict_images:
+            r1 = detect2(modelStamp, dict_images[id])
+            if r1 is None:
+                return render_template('no_detection.html')
+            list_dups = array_indexes_of_duplicates_of(r1['class_ids'])
+            r1['scores'], r1['rois'], r1['class_ids'], r1['masks'] = filter_array_of_array(r1['class_ids'],
+                                                                                           r1['scores'], r1['rois'],
+                                                                                           r1['masks'], list_dups)
+            stamp_image_copy = dict_images[id].copy()
+            image_pure, rfederaciya = crop_instances(stamp_image_copy, r1['rois'], r1['class_ids'],
+                                                     [1, 2, 3, 4, 7, 8, 11, 12, 15, 16, 23, 24])
+            dict_images_stamp = instances_to_images(image_pure, r1['rois'], r1['class_ids'],
+                                                    names=class_names_modelStamp,
+                                                    list_accepted_ids=[5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25, 26,
+                                                                       27,
+                                                                       28,
+                                                                       29, 30, 31, 32, 33, 34], stamp=True)
+            for id in dict_images_stamp:
+                if id in what_cropped:
+                    continue
+                else:
+                    if id == "Date_v" or id == "Date_h":
+                        if isinstance(dict_images_stamp[id], list):
+                            text = datetime_extract(dict_images_stamp[id][0])
+                        else:
+                            text = datetime_extract(dict_images_stamp[id])
+                        dict_text[id] = text
+                    elif id in ["Label_oper", "Label_eng", "Label_mgr", "Label_chk", "Label_by", "Label_supv"]:
+                        try:
+                            if dict_images_stamp[id]["Coordinates"] is None:
+                                dict_text[id] = "Empty"
+                            else:
+                                text = image_to_string(dict_images_stamp[id]["Coordinates"], lang="eng1.9to1.10_3",
+                                                       config=r'--oem 3 --psm 7 -c page_separator=""')
+                                print("ОРИГ ЛЭЙБЛА РОЛИ: " + text)
+                                text = check_O(text)
+                                text = replace_numbers(text)
+                                dict_text[id] = text
+
+                        except TypeError:
+                            if isinstance(dict_images_stamp[id], list):
+                                if dict_images_stamp[id][0]["Coordinates"] is None:
+                                    dict_text[id] = "Empty"
+                                else:
+                                    im = Image.fromarray(dict_images_stamp[id][0]["Coordinates"])
+                                    dict_text[id] = replace_numbers(
+                                        check_O(image_to_string(im, lang="eng1.9to1.10_3",
+                                                                config=r'--oem 3 --psm 7 -c '
+                                                                       r'page_separator=""')))
+                    elif id == "Role_input":
+                        pass
+                    elif id in ["REV_h",
+                                "REV_v"]:
+                        if isinstance(dict_images_stamp[id], list):
+                            # text = image_to_string(dict_images_stamp[id][0], lang="eng1.4to_proj_no3",
+                            #                        config=r'--oem 3 --psm 8 -c page_separator=""')
+                            text = image_to_string(dict_images_stamp[id][0], lang='eng1.9',
+                                                   config=r'--oem 3 --psm 8 -c page_separator=""')
+                        else:
+                            # text = image_to_string(dict_images_stamp[id], lang="eng1.4to_proj_no3",
+                            #                        config=r'--oem 3 --psm 8 -c page_separator=""')
+                            text = image_to_string(dict_images_stamp[id], lang='eng1.9',
+                                                   config=r'--oem 3 --psm 8 -c page_separator=""')
+                        text = text.replace("O", "0")
+                        dict_text[id] = text
+                    elif id in ["Scale_v", "Scale_h"]:
+                        if isinstance(dict_images_stamp[id], list):
+                            text = image_to_string(dict_images_stamp[id][0], lang="eng1.9+rus1.7",
+                                                   config=r'--oem 3 --psm 7 -c page_separator=""')
+                        else:
+                            text = image_to_string(dict_images_stamp[id], lang="eng1.9+rus1.7",
+                                                   config=r'--oem 3 --psm 7 -c page_separator=""')
+                        if text == "":
+                            text = "-"
+                        elif text is None:
+                            text = "-"
+                        dict_text[id] = text
+                    elif id in ["Project_name_h", "Project_name_v"]:
+                        if isinstance(dict_images_stamp[id], list):
+                            dict_images_stamp[id] = dict_images_stamp[id][0]
+                        # if isinstance(dict_images_stamp[id], list):
+                        #     text = image_to_string(dict_images_stamp[id][0], lang="eng1.9to1.10_5+rus1.7to1.9_4",
+                        #                            config=r'--oem 3 --psm 6 -c page_separator=""')
+                        # else:
+                        #     Image.fromarray(dict_images_stamp[id]).show()
+                        #     text = image_to_string(dict_images_stamp[id], lang="eng1.9to1.10_5+rus1.7to1.9_4",
+                        #                            config=r'--oem 3 --psm 6 -c page_separator=""')
+                        df = image_to_df(dict_images_stamp[id], section="text", lang=langeng,
+                                         config=r'--oem 3 --psm 6 -c page_separator=""')  # Прокручиваем всё на англ языке
+                        a = 0
+                        sum_lines = 0
+                        line_qt = df.max()['line_num']
+                        if df.max()['par_num'] > 1:
+                            for i in range(df.max()['par_num']):
+                                rslt = df[df['par_num'] == i + 1]
+                                try:
+                                    sum_lines += rslt.max()['line_num']
+                                    # df_orig_par2 = df[df['par_num'] == i]
+                                    # df_orig_par2.line_num += df[df['par_num'] == i].max()['line_num']
+                                except:
+                                    pass
+                            line_qt = sum_lines
+
+                        text_eng_name, text_rus_name = project_name_correction(df, line_qt, dict_images_stamp[id],
+                                                                               langeng,
+                                                                               langrus)
+
+                        # if isinstance(dict_images_stamp[id], list):
+                        #     text_name_pr = image_to_string(dict_images_stamp[id][0],
+                        #                                    lang="eng1.9to1.10_5+rus1.7to1.9_4",
+                        #                                    config=r'--oem 3 --psm 6 -c page_separator=""')
+                        # else:
+                        #     text_name_pr = image_to_string(dict_images_stamp[id],
+                        #                                    lang="eng1.9to1.10_5+rus1.7to1.9_4",
+                        #                                    config=r'--oem 3 --psm 6 -c page_separator=""')
+
+                    elif id in ["Proj_no_h", "Proj_no_v"]:
+                        if isinstance(dict_images_stamp[id], list):
+                            text = image_to_string(dict_images_stamp[id][0], lang="eng1.3to_proj_no3",
+                                                   config=r'--oem 3 --psm 7 -c page_separator=""')
+                        else:
+                            text = image_to_string(dict_images_stamp[id], lang="eng1.3to_proj_no3",
+                                                   config=r'--oem 3 --psm 7 -c page_separator=""')
+                        print("ТЕКСТ ОРИГ ПРОЖ. НОМЕРА:   " + text)
+                        patterns0 = [
+                            re.compile(r"\b0-|-0-"),  # Паттерн отдельных мнимых 0, в реальности это буква О
+                            re.compile(r"([A-Za-z0-9]+(-[A-Za-z0-9]+)+)")
+                        ]
+                        text = replace_code(text)
+                        for match_zeros in re.finditer(patterns0[0], text):
+                            text = text[0:match_zeros.start()] + text[
+                                                                 match_zeros.start(): match_zeros.end()].replace(
+                                "0",
+                                "O") + text[
+                                       match_zeros.end(): len(
+                                           text)]  # На каждый найденный мнимый 0, заменяем его в тексте
+                        dict_text['Proj_no_2'] = image_to_string(dict_images_stamp[id], lang="Proj_no_re_1",
+                                                   config=r'--oem 3 --psm 7 -c page_separator=""')
+                        dict_text[id] = text
+                    elif id in ["Dr_no_h", "Dr_no_v"]:
+                        if isinstance(dict_images_stamp[id], list):
+                            text = image_to_string(dict_images_stamp[id][0], lang="Dr_no_3",
+                                                   config=r'--oem 3 --psm 6 -c page_separator=""')
+                        else:
+                            text = image_to_string(dict_images_stamp[id], lang="Dr_no_3",
+                                                   config=r'--oem 3 --psm 6 -c page_separator=""')
+                        patterns0 = [
+                            re.compile(r"\b0-|-0-"),  # Паттерн отдельных мнимых 0, в реальности это буква О
+                            re.compile(r"([A-Za-z0-9]+(-[A-Za-z0-9]+)+)")
+                        ]
+                        print("ТЕКСТ ОРИГ ДР НОМЕРА:    os.path.basename(path)" + text)
+                        print("НОМЕР ДОКА : " + os.path.basename(output_image_path))
+                        text = replace_code(text)
+                        for match_zeros in re.finditer(patterns0[0], text):
+                            text = text[0:match_zeros.start()] + text[
+                                                                 match_zeros.start(): match_zeros.end()].replace(
+                                "0",
+                                "O") + text[
+                                       match_zeros.end(): len(
+                                           text)]  # На каждый найденный мнимый 0, заменяем его в тексте
+                        dict_text[id] = text
+                    else:
+                        if isinstance(dict_images_stamp[id], list):
+                            list_text = []
+                            for i in dict_images_stamp[id]:
+                                text = image_to_string(i, lang="eng1.9to1.10_4+rus1.7to1.9_2",
+                                                       config=r'--oem 3 --psm 6 -c page_separator=""')
+                                list_text.append(text)
+                            dict_text[id] = list_text
+                        else:
+                            text = image_to_string(dict_images_stamp[id], lang="eng1.9to1.10_4+rus1.7to1.9_2",
+                                                   config=r'--oem 3 --psm 6 -c page_separator=""')
+                            dict_text[id] = text
+
+        # dict_text["CHECK_WITH_THIS"] = text_name_pr
+        if text_rus_name is not None:
+            dict_text["Rus_name"] = text_rus_name
+            dict_text["Eng_name"] = text_eng_name
+        elif text_rus_name is None and text_eng_name is None:
+            dict_text["Rus_name"] = None
+            dict_text["eng_name"] = None
+        else:
+            dict_text["Eng_name"] = text_eng_name
+        dict_text["File_name"] = os.path.basename(output_image_path)
+
+        # with open(os.path.join(os.path.dirname(output_image_path), "sample.json"), "w", encoding="utf-8") as outfile:
+        #     json.dump(dict_text, outfile, skipkeys=True, indent=4)
+        # with open(os.path.join(app.config['UPLOAD_FOLDER'], "sample_no_ascii.json"), "w", encoding="utf-8") as outfile:
+        #     json.dump(dict_text, outfile, skipkeys=True, indent=4, ensure_ascii=False)
+
+        # boxed_image = list(dict_images.values())[0]
+        # image0 = splash_global(modelStamp, class_names_modelStamp, boxed_image)
+
+        # output_image_path = output_image_path.replace(".pdf", ".jpg")
+        #
+        # skimage.io.imsave(output_image_path, image0)
+        #
+        # output_image_path = output_image_path.replace("/Static/", "")
+        # print(output_image_path)
+
+        # filename = "/Static/images/" + os.path.basename(image_path)
+        #
+        # send_file(image_path)
+
+        # , prediction=output_image_path
+
+        # return render_template('indexdownload.html')
+        return dict_text
+    except:
+        # return render_template('no_detection.html')
+        return None
+
+
 UPLOAD_FOLDER = os.path.join('Static', 'images')
 app = Flask(__name__,
             static_folder="C:\\Users\\kuanyshov.a\\Documents\\Project\\flask_project\\FirstFlaskWebApp\\Static")
+app.config['SECRET_KEY'] = 'tempkey'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 langeng = 'eng1.9to1.10_5'
@@ -392,235 +639,24 @@ def hello_world():
 
 
 @app.route('/detect', methods=['POST', 'GET'])
-def predict():
+def send():
     if request.method == 'POST':
-        # global graph, session
-        # with session.as_default():
-        pdffile = request.files['pdffile']
-        # image_path = "./Static/" + "/images/" + imagefile.filename
-        output_image_path = os.path.join(app.config['UPLOAD_FOLDER'], pdffile.filename)
-        pdffile.save(output_image_path)
-
-        image = get_image_for_blueprint(output_image_path, dpi=300)
-
-        r0 = detect1(model2, image)
-        if r0 is None:
+        pdffile = request.files['filename']
+        dict_text = predict(pdffile)
+        if dict_text is None:
             return render_template('no_detection.html')
-        if 1 in r0['class_ids'] and 2 in r0['class_ids']:  # Оба штампа найдены
-            # Выбираем тот в котором больше уверенности
-            if r0['scores'][np.where(r0['class_ids'] == 1)[0][0]] > r0['scores'][np.where(r0['class_ids'] == 2)[0][0]]:
-                accept = [1]
-            else:
-                accept = [2]
         else:
-            accept = [1, 2]
+            return json.dumps(dict_text, skipkeys=True, indent=4, ensure_ascii=False)
 
-        what_cropped = ["Stamp", "Company_name", "Label_title_h", "Label_title_v", "Label_Proj_no_h",
-                        "Label_Proj_no_v", "Label_dr_no_h", "Label_dr_no_v", "Label_rev_h", "Label_rev_v",
-                        "Label_scale_h", "Label_scale_v", "Label_date_h", "Label_date_v"]
-        dict_images = instances_to_images(image, r0['rois'], r0['class_ids'], names=class_names_model2,
-                                          list_accepted_ids=accept, stamp=False)
-        dict_text = {}
 
-        try:
-            for id in dict_images:
-                r1 = detect2(modelStamp, dict_images[id])
-                if r1 is None:
-                    return render_template('no_detection.html')
-                list_dups = array_indexes_of_duplicates_of(r1['class_ids'])
-                r1['scores'], r1['rois'], r1['class_ids'], r1['masks'] = filter_array_of_array(r1['class_ids'],
-                                                                                               r1['scores'], r1['rois'],
-                                                                                               r1['masks'], list_dups)
-                stamp_image_copy = dict_images[id].copy()
-                image_pure, rfederaciya = crop_instances(stamp_image_copy, r1['rois'], r1['class_ids'],
-                                                         [1, 2, 3, 4, 7, 8, 11, 12, 15, 16, 23, 24])
-                dict_images_stamp = instances_to_images(image_pure, r1['rois'], r1['class_ids'], names=class_names_modelStamp,
-                                                        list_accepted_ids=[5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25, 26, 27,
-                                                                           28,
-                                                                           29, 30, 31, 32, 33, 34], stamp=True)
-                for id in dict_images_stamp:
-                    if id in what_cropped:
-                        continue
-                    else:
-                        if id == "Date_v" or id == "Date_h":
-                            if isinstance(dict_images_stamp[id], list):
-                                text = datetime_extract(dict_images_stamp[id][0])
-                            else:
-                                text = datetime_extract(dict_images_stamp[id])
-                            dict_text[id] = text
-                        elif id in ["Label_oper", "Label_eng", "Label_mgr", "Label_chk", "Label_by", "Label_supv"]:
-                            try:
-                                if dict_images_stamp[id]["Coordinates"] is None:
-                                    dict_text[id] = "Empty"
-                                else:
-                                    text = image_to_string(dict_images_stamp[id]["Coordinates"], lang="eng1.9to1.10_3",
-                                                           config=r'--oem 3 --psm 7 -c page_separator=""')
-                                    print("ОРИГ ЛЭЙБЛА РОЛИ: " + text)
-                                    text = check_O(text)
-                                    text = replace_numbers(text)
-                                    dict_text[id] = text
+@app.route('/pdf', methods=['POST'])
+def reveive():
+    return jsonify({"message": "Well received"})
 
-                            except TypeError:
-                                if isinstance(dict_images_stamp[id], list):
-                                    if dict_images_stamp[id][0]["Coordinates"] is None:
-                                        dict_text[id] = "Empty"
-                                    else:
-                                        im = Image.fromarray(dict_images_stamp[id][0]["Coordinates"])
-                                        dict_text[id] = replace_numbers(check_O(image_to_string(im, lang="eng1.9to1.10_3",
-                                                                                                config=r'--oem 3 --psm 7 -c '
-                                                                                                       r'page_separator=""')))
-                        elif id == "Role_input":
-                            pass
-                        elif id in ["REV_h",
-                                    "REV_v"]:
-                            if isinstance(dict_images_stamp[id], list):
-                                # text = image_to_string(dict_images_stamp[id][0], lang="eng1.4to_proj_no3",
-                                #                        config=r'--oem 3 --psm 8 -c page_separator=""')
-                                text = image_to_string(dict_images_stamp[id][0], lang='eng1.9',
-                                                       config=r'--oem 3 --psm 8 -c page_separator=""')
-                            else:
-                                # text = image_to_string(dict_images_stamp[id], lang="eng1.4to_proj_no3",
-                                #                        config=r'--oem 3 --psm 8 -c page_separator=""')
-                                text = image_to_string(dict_images_stamp[id], lang='eng1.9',
-                                                       config=r'--oem 3 --psm 8 -c page_separator=""')
-                            text = text.replace("O", "0")
-                            dict_text[id] = text
-                        elif id in ["Scale_v", "Scale_h"]:
-                            if isinstance(dict_images_stamp[id], list):
-                                text = image_to_string(dict_images_stamp[id][0], lang="eng1.9+rus1.7",
-                                                       config=r'--oem 3 --psm 7 -c page_separator=""')
-                            else:
-                                text = image_to_string(dict_images_stamp[id], lang="eng1.9+rus1.7",
-                                                       config=r'--oem 3 --psm 7 -c page_separator=""')
-                            if text == "":
-                                text = "-"
-                            elif text is None:
-                                text = "-"
-                            dict_text[id] = text
-                        elif id in ["Project_name_h", "Project_name_v"]:
-                            if isinstance(dict_images_stamp[id], list):
-                                dict_images_stamp[id] = dict_images_stamp[id][0]
-                            # if isinstance(dict_images_stamp[id], list):
-                            #     text = image_to_string(dict_images_stamp[id][0], lang="eng1.9to1.10_5+rus1.7to1.9_4",
-                            #                            config=r'--oem 3 --psm 6 -c page_separator=""')
-                            # else:
-                            #     Image.fromarray(dict_images_stamp[id]).show()
-                            #     text = image_to_string(dict_images_stamp[id], lang="eng1.9to1.10_5+rus1.7to1.9_4",
-                            #                            config=r'--oem 3 --psm 6 -c page_separator=""')
-                            df = image_to_df(dict_images_stamp[id], section="text", lang=langeng,
-                                             config=r'--oem 3 --psm 6 -c page_separator=""')  # Прокручиваем всё на англ языке
-                            a = 0
-                            sum_lines = 0
-                            line_qt = df.max()['line_num']
-                            if df.max()['par_num'] > 1:
-                                for i in range(df.max()['par_num']):
-                                    rslt = df[df['par_num'] == i + 1]
-                                    try:
-                                        sum_lines += rslt.max()['line_num']
-                                        # df_orig_par2 = df[df['par_num'] == i]
-                                        # df_orig_par2.line_num += df[df['par_num'] == i].max()['line_num']
-                                    except:
-                                        pass
-                                line_qt = sum_lines
 
-                            text_eng_name, text_rus_name = project_name_correction(df, line_qt, dict_images_stamp[id], langeng,
-                                                                                   langrus)
-
-                            if isinstance(dict_images_stamp[id], list):
-                                text_name_pr = image_to_string(dict_images_stamp[id][0], lang="eng1.9to1.10_5+rus1.7to1.9_4",
-                                                               config=r'--oem 3 --psm 6 -c page_separator=""')
-                            else:
-                                text_name_pr = image_to_string(dict_images_stamp[id], lang="eng1.9to1.10_5+rus1.7to1.9_4",
-                                                               config=r'--oem 3 --psm 6 -c page_separator=""')
-
-                        elif id in ["Proj_no_h", "Proj_no_v"]:
-                            if isinstance(dict_images_stamp[id], list):
-                                text = image_to_string(dict_images_stamp[id][0], lang="eng1.3to_proj_no3",
-                                                       config=r'--oem 3 --psm 7 -c page_separator=""')
-                            else:
-                                text = image_to_string(dict_images_stamp[id], lang="eng1.3to_proj_no3",
-                                                       config=r'--oem 3 --psm 7 -c page_separator=""')
-                            print("ТЕКСТ ОРИГ ПРОЖ. НОМЕРА:   " + text)
-                            patterns0 = [
-                                re.compile(r"\b0-|-0-"),  # Паттерн отдельных мнимых 0, в реальности это буква О
-                                re.compile(r"([A-Za-z0-9]+(-[A-Za-z0-9]+)+)")
-                            ]
-                            text = replace_code(text)
-                            for match_zeros in re.finditer(patterns0[0], text):
-                                text = text[0:match_zeros.start()] + text[match_zeros.start(): match_zeros.end()].replace(
-                                    "0",
-                                    "O") + text[
-                                           match_zeros.end(): len(
-                                               text)]  # На каждый найденный мнимый 0, заменяем его в тексте
-                            dict_text[id] = text
-                        elif id in ["Dr_no_h", "Dr_no_v"]:
-                            if isinstance(dict_images_stamp[id], list):
-                                text = image_to_string(dict_images_stamp[id][0], lang="Dr_no_3",
-                                                       config=r'--oem 3 --psm 6 -c page_separator=""')
-                            else:
-                                text = image_to_string(dict_images_stamp[id], lang="Dr_no_3",
-                                                       config=r'--oem 3 --psm 6 -c page_separator=""')
-                            patterns0 = [
-                                re.compile(r"\b0-|-0-"),  # Паттерн отдельных мнимых 0, в реальности это буква О
-                                re.compile(r"([A-Za-z0-9]+(-[A-Za-z0-9]+)+)")
-                            ]
-                            print("ТЕКСТ ОРИГ ДР НОМЕРА:    os.path.basename(path)" + text)
-                            print("НОМЕР ДОКА : " + os.path.basename(output_image_path))
-                            text = replace_code(text)
-                            for match_zeros in re.finditer(patterns0[0], text):
-                                text = text[0:match_zeros.start()] + text[match_zeros.start(): match_zeros.end()].replace(
-                                    "0",
-                                    "O") + text[
-                                           match_zeros.end(): len(
-                                               text)]  # На каждый найденный мнимый 0, заменяем его в тексте
-                            dict_text[id] = text
-                        else:
-                            if isinstance(dict_images_stamp[id], list):
-                                list_text = []
-                                for i in dict_images_stamp[id]:
-                                    text = image_to_string(i, lang="eng1.9to1.10_4+rus1.7to1.9_2",
-                                                           config=r'--oem 3 --psm 6 -c page_separator=""')
-                                    list_text.append(text)
-                                dict_text[id] = list_text
-                            else:
-                                text = image_to_string(dict_images_stamp[id], lang="eng1.9to1.10_4+rus1.7to1.9_2",
-                                                       config=r'--oem 3 --psm 6 -c page_separator=""')
-                                dict_text[id] = text
-
-            dict_text["CHECK_WITH_THIS"] = text_name_pr
-            if text_rus_name is not None:
-                dict_text["Rus_name"] = text_rus_name
-                dict_text["Eng_name"] = text_eng_name
-            elif text_rus_name is None and text_eng_name is None:
-                dict_text["Rus_name"] = None
-                dict_text["eng_name"] = None
-            else:
-                dict_text["Eng_name"] = text_eng_name
-            dict_text["File_name"] = os.path.basename(output_image_path)
-
-            with open(os.path.join(os.path.dirname(output_image_path), "sample.json"), "w", encoding="utf-8") as outfile:
-                json.dump(dict_text, outfile, skipkeys=True, indent=4)
-            with open(os.path.join(app.config['UPLOAD_FOLDER'], "sample_no_ascii.json"), "w", encoding="utf-8") as outfile:
-                json.dump(dict_text, outfile, skipkeys=True, indent=4, ensure_ascii=False)
-
-            # boxed_image = list(dict_images.values())[0]
-            # image0 = splash_global(modelStamp, class_names_modelStamp, boxed_image)
-
-            # output_image_path = output_image_path.replace(".pdf", ".jpg")
-            #
-            # skimage.io.imsave(output_image_path, image0)
-            #
-            # output_image_path = output_image_path.replace("/Static/", "")
-            # print(output_image_path)
-
-            # filename = "/Static/images/" + os.path.basename(image_path)
-            #
-            # send_file(image_path)
-
-            # , prediction=output_image_path
-            return render_template('indexdownload.html')
-        except:
-            return render_template('no_detection.html')
+@app.route('/processjson', methods=['POST'])
+def process():
+    return None
 
 
 @app.route('/download', methods=['POST', 'GET'])
